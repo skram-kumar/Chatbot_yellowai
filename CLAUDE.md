@@ -6,27 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A minimal chatbot platform (assignment project). Users register/log in, create
 projects ("agents"), attach prompts to a project, and chat with that agent
-through an endpoint that forwards to OpenRouter's completion API for the LLM
-response. The frontend is plain HTML/CSS/JS, served as static files
-independent of the API (no frontend build tooling, no SSR).
+through an endpoint that forwards to Groq's OpenAI-compatible chat completions
+API for the LLM response. The frontend is plain HTML/CSS/JS, served as static
+files independent of the API (no frontend build tooling, no SSR).
 
-This repo is greenfield — no code has been scaffolded yet. The sections below
-describe the architecture and conventions to follow while building it out, not
-things that already exist on disk. Update this file as real structure lands
-so it stays accurate.
+Auth, project/prompt CRUD, and the chat endpoint are implemented (see
+`app/`). The database is a hosted Neon Postgres instance, migrated via
+Alembic. Update this file as the architecture evolves so it stays accurate.
 
 ## Tech stack
 
-- **FastAPI** — API framework, async endpoints for anything I/O-bound (DB, OpenRouter calls)
-- **PostgreSQL** — primary datastore
-- **SQLAlchemy** (async) — ORM
+- **FastAPI** — API framework, async endpoints for anything I/O-bound (DB, Groq calls)
+- **PostgreSQL** (Neon, hosted) — primary datastore
+- **SQLAlchemy** (async, via `asyncpg`) — ORM
 - **Alembic** — schema migrations
 - **Pydantic / pydantic-settings** — request/response schemas and typed settings loaded from env vars
-- **passlib[bcrypt]** — password hashing
-- **python-jose** (or **pyjwt**) — JWT creation/verification
-- **httpx** — async HTTP client for calling the OpenRouter API
+- **bcrypt** (direct, not passlib) — password hashing; passlib was dropped after its bug-detection
+  routine crashed against modern bcrypt (>=4.x) — see `app/core/security.py`
+- **python-jose** — JWT creation/verification
+- **httpx** — async HTTP client for calling the Groq API
 - **uvicorn** — ASGI server
-- **pytest** + **httpx.AsyncClient** / **pytest-asyncio** — tests
+- **pytest** + **httpx.AsyncClient** / **pytest-asyncio** — tests (not yet written)
 
 ## Intended architecture
 
@@ -47,31 +47,40 @@ app/
   api/
     routes/
       auth.py           # register, login
-      projects.py       # CRUD for projects/agents + their prompts
-      chat.py           # chat endpoint
-    deps.py             # shared FastAPI dependencies (get_db, get_current_user)
+      projects.py       # CRUD for projects/agents
+      prompts.py        # CRUD for prompts, nested under /projects/{project_id}/prompts
+      chat.py           # POST/GET /projects/{project_id}/chat
+    deps.py             # shared FastAPI dependencies: get_db, get_current_user, get_owned_project
   services/
-    openrouter.py       # OpenRouter client: builds request, calls completion API, maps errors
+    llm.py              # Groq client: builds request, calls chat completions, maps errors
   alembic/                # migration environment + versions
 tests/
 ```
 
-### Data model (as implied by requirements)
+### Data model
 
 - `User` 1—N `Project` (a project belongs to exactly one user)
-- `Project` 1—N `Prompt` (prompts are scoped to a project/agent)
-- Chat endpoint: given a `project_id` and a user message, loads the project's
-  prompt(s) as context, calls `services/openrouter.py`, returns the
-  completion. Keep chat stateless unless/until conversation history is
-  explicitly required.
+- `Project` 1—N `Prompt` (prompts are scoped to a project/agent; a project can
+  have several — the chat endpoint uses the most recently created one as the
+  active system prompt)
+- `Project` 1—N `Message` (`role` is `user`/`assistant`; chat history is
+  persisted per project, not stateless)
+- Chat endpoint: given a `project_id` and a user message, saves the user
+  message, builds the conversation (active prompt as system message + prior
+  `Message` history + the new message), calls `services/llm.py`, saves and
+  returns the assistant reply alongside the user message.
 
 ### Request flow
 
 Router (`api/routes/*`) → validates via Pydantic schema → dependency injects
-DB session + current user (`api/deps.py`) → business logic lives in
+DB session + current user (`api/deps.py`) → ownership on project-scoped
+routes is enforced via the shared `get_owned_project` dependency (404s,
+never 403, if the project doesn't exist or isn't the caller's — the two
+cases are indistinguishable in the response) → business logic lives in
 `services/` or directly in the route for simple CRUD → SQLAlchemy model →
-Postgres. External calls (OpenRouter) are isolated in `services/openrouter.py`
-so the provider can be swapped without touching route code.
+Postgres. External calls (Groq) are isolated in `services/llm.py` so the
+provider can be swapped without touching route code; failures there are
+caught and surfaced as a clean `502`, never an unhandled `500`.
 
 ## Coding conventions
 
@@ -81,23 +90,24 @@ so the provider can be swapped without touching route code.
   `ProjectRead`, `PromptUpdate`).
 - **Modularity**: one router per resource under `api/routes/`; one model
   module per table under `models/`; no business logic in `main.py` beyond
-  wiring. Keep the OpenRouter integration behind `services/openrouter.py` —
-  routes should never call an LLM API directly.
-- **Secrets & config**: all secrets (DB URL, JWT signing key, OpenRouter API
-  key) come from environment variables via `core/config.py`
-  (pydantic-settings), loaded from a local `.env` that is never committed.
-  Never hardcode credentials, keys, or connection strings in source.
-- **Auth**: hash passwords with bcrypt via passlib — never store or log plain
-  passwords. JWTs are short-lived access tokens signed with a secret from
-  env; verify signature and expiry on every protected route via a shared
+  wiring. Keep the Groq integration behind `services/llm.py` — routes should
+  never call an LLM API directly.
+- **Secrets & config**: all secrets (DB URL, JWT signing key, Groq API key)
+  come from environment variables via `core/config.py` (pydantic-settings),
+  loaded from a local `.env` that is never committed. Never hardcode
+  credentials, keys, or connection strings in source.
+- **Auth**: hash passwords with bcrypt — never store or log plain passwords.
+  JWTs are short-lived access tokens signed with a secret from env; verify
+  signature and expiry on every protected route via a shared
   `get_current_user` dependency. Every project/prompt/chat route must confirm
-  the resource belongs to the requesting user (no cross-user access by
-  guessing IDs).
+  the resource belongs to the requesting user via `get_owned_project` (no
+  cross-user access by guessing IDs).
 - **Error handling**: raise `HTTPException` with accurate status codes
-  (400/401/403/404/422/502 for upstream OpenRouter failures) and consistent
-  JSON error bodies; don't leak stack traces or upstream provider internals
-  to the client. Wrap OpenRouter calls so network/timeout/rate-limit errors
-  surface as clean 502/503s instead of unhandled exceptions.
+  (400/401/404/409/422/502 for upstream Groq failures) and consistent JSON
+  error bodies; don't leak stack traces or upstream provider internals to the
+  client. `services/llm.py` wraps Groq calls so network/timeout/HTTP errors
+  raise a single `LLMServiceError`, which routes translate to a clean `502`
+  instead of an unhandled `500`.
 - **Async**: DB and outbound HTTP calls are `async def` using the async
   SQLAlchemy session and `httpx.AsyncClient`.
 - **Migrations**: schema changes go through Alembic migrations, not manual
@@ -105,14 +115,17 @@ so the provider can be swapped without touching route code.
 
 ## Commands
 
-Not yet runnable — no `requirements.txt`/`pyproject.toml` or app code exists.
-Once scaffolded, the expected commands are:
-
 ```bash
-pip install -r requirements.txt          # or: poetry install / uv sync
-uvicorn app.main:app --reload            # run the API locally
-alembic upgrade head                     # apply migrations
-alembic revision --autogenerate -m "..."  # create a migration after model changes
-pytest                                    # run tests
-pytest tests/test_auth.py::test_login     # run a single test
+pip install -r requirements.txt                            # install deps (run inside venv/)
+uvicorn app.main:app --reload --reload-dir app --port 8000  # run the API locally
+alembic upgrade head                                        # apply migrations
+alembic revision --autogenerate -m "..."                    # create a migration after model changes
+pytest                                                       # run tests
+pytest tests/test_auth.py::test_login                       # run a single test
 ```
+
+Note: `uvicorn --reload` watching the whole project root has been unreliable
+on this machine (stalls silently on file changes, especially when `pip
+install` touches files under `venv/`) — scope it to `--reload-dir app`, and if
+a reload still looks stuck, kill and restart the process rather than trusting
+it.
