@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chatbot Platform</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- Login / register -->
+  <section id="auth-view" class="view">
+    <div class="card auth-card">
+      <h1>Chatbot Platform</h1>
+      <div class="tabs">
+        <button type="button" id="tab-login" class="tab active">Login</button>
+        <button type="button" id="tab-register" class="tab">Register</button>
+      </div>
+      <form id="auth-form">
+        <label for="auth-email">Email</label>
+        <input type="email" id="auth-email" required autocomplete="email" />
+        <label for="auth-password">Password</label>
+        <input type="password" id="auth-password" required autocomplete="current-password" minlength="8" />
+        <button type="submit" id="auth-submit">Log In</button>
+      </form>
+      <p id="auth-error" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- Dashboard -->
+  <section id="dashboard-view" class="view hidden">
+    <header class="topbar">
+      <h1>Your Projects</h1>
+      <button type="button" class="secondary logout-btn">Log Out</button>
+    </header>
+
+    <div class="card">
+      <h2>New Project</h2>
+      <form id="new-project-form">
+        <label for="project-name">Name</label>
+        <input type="text" id="project-name" required maxlength="255" />
+        <label for="project-description">Description</label>
+        <input type="text" id="project-description" maxlength="1000" />
+        <button type="submit">Create Project</button>
+      </form>
+      <p id="dashboard-error" class="error hidden"></p>
+    </div>
+
+    <div class="card">
+      <h2>Projects</h2>
+      <ul id="project-list" class="project-list"></ul>
+      <p id="project-list-empty" class="muted hidden">No projects yet — create one above.</p>
+    </div>
+  </section>
+
+  <!-- Project / chat -->
+  <section id="project-view" class="view hidden">
+    <header class="topbar">
+      <button type="button" id="back-btn" class="secondary">&larr; Back</button>
+      <h1 id="project-title"></h1>
+      <button type="button" class="secondary logout-btn">Log Out</button>
+    </header>
+
+    <div class="card hidden" id="prompt-setup">
+      <h2>Set System Prompt</h2>
+      <p class="muted">This agent needs a system prompt before you can chat with it.</p>
+      <form id="prompt-form">
+        <textarea id="prompt-content" rows="4" required placeholder="You are a helpful assistant that..."></textarea>
+        <button type="submit">Save Prompt</button>
+      </form>
+      <p id="prompt-error" class="error hidden"></p>
+    </div>
+
+    <div class="card chat-card hidden" id="chat-area">
+      <div id="messages" class="messages"></div>
+      <p id="chat-error" class="error hidden"></p>
+      <form id="chat-form" class="chat-form">
+        <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off" required />
+        <button type="submit" id="chat-send">Send</button>
+      </form>
+    </div>
+  </section>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
