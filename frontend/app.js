@@ -1,4 +1,7 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Relative to whatever origin served this page — correct both for the
+// combined single-process setup (FastAPI serving this frontend at "/") and
+// once deployed, since the API and frontend share an origin there too.
+const API_BASE = "";
 const TOKEN_KEY = "chatbot_jwt";
 
 const state = {
